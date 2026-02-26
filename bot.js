@@ -1,6 +1,7 @@
 const { Bot, Keyboard, InlineKeyboard, session } = require('grammy');
 const fs = require('fs').promises;
 const path = require('path');
+const express = require('express');
 require('dotenv').config();
 
 // Создаем экземпляр бота
@@ -142,7 +143,7 @@ bot.command('start', async (ctx) => {
     );
 });
 
-// Обработка callback-запросов (инлайн кнопки)
+// Обработка callback-запросов
 bot.callbackQuery('about', async (ctx) => {
     await ctx.answerCallbackQuery();
     
@@ -372,19 +373,76 @@ bot.on('message:contact', async (ctx) => {
     );
 });
 
-// Запуск бота
-bot.start({
-    onStart: (botInfo) => {
-        console.log(`\n✅ Бот @${botInfo.username} запущен и готов к работе!`);
-        console.log(`📅 Время запуска: ${new Date().toLocaleString()}`);
-        if (ADMIN_ID) {
-            console.log(`👑 Админ ID: ${ADMIN_ID} (из .env)`);
-        } else {
-            console.log(`⚠️ Админ не настроен! Добавь ADMIN_ID в .env`);
+// === WEBHOOK НАСТРОЙКИ ДЛЯ RENDER ===
+const PORT = process.env.PORT || 3000;
+const WEBHOOK_URL = process.env.RENDER_EXTERNAL_URL; // Render сам подставит URL
+
+if (WEBHOOK_URL) {
+    // На Render - используем webhook
+    console.log('🌐 Режим: Webhook на Render');
+    
+    // Создаем Express приложение
+    const app = express();
+    app.use(express.json());
+    
+    // Главная страница для проверки Render
+    app.get('/', (req, res) => {
+        res.status(200).send(`
+            <html>
+                <head><title>Stefan Budimir Bot</title></head>
+                <body>
+                    <h1>🤖 Bot is running!</h1>
+                    <p>Telegram bot @stefan_budimir_bot is active.</p>
+                    <p><a href="https://t.me/stefan_budimir_bot" target="_blank">Open in Telegram</a></p>
+                </body>
+            </html>
+        `);
+    });
+    
+    // Health check для Render (обязательно!)
+    app.get('/health', (req, res) => {
+        res.status(200).send('OK');
+    });
+    
+    // Webhook эндпоинт для Telegram
+    app.post('/webhook', (req, res) => {
+        bot.handleUpdate(req.body, res);
+    });
+    
+    // Устанавливаем webhook в Telegram
+    (async () => {
+        try {
+            const webhookUrl = `${WEBHOOK_URL}/webhook`;
+            await bot.api.setWebhook(webhookUrl);
+            console.log(`✅ Webhook установлен на ${webhookUrl}`);
+        } catch (error) {
+            console.error('❌ Ошибка установки webhook:', error);
         }
-        console.log(`🛑 Для остановки нажми Ctrl+C\n`);
-    }
-});
+    })();
+    
+    // Запускаем сервер
+    app.listen(PORT, '0.0.0.0', () => {
+        console.log(`🚀 Сервер webhook запущен на порту ${PORT}`);
+        console.log(`📅 Время запуска: ${new Date().toLocaleString()}`);
+        console.log(`👑 Админ ID: ${ADMIN_ID}`);
+        console.log(`🌐 URL сервера: ${WEBHOOK_URL}`);
+        console.log(`🔗 Webhook URL: ${WEBHOOK_URL}/webhook`);
+    });
+    
+} else {
+    // Локально - используем polling
+    console.log('🔄 Режим: Polling (локально)');
+    
+    bot.start({
+        onStart: (botInfo) => {
+            console.log(`✅ Бот @${botInfo.username} запущен в режиме polling!`);
+            console.log(`📅 Время запуска: ${new Date().toLocaleString()}`);
+            if (ADMIN_ID) {
+                console.log(`👑 Админ ID: ${ADMIN_ID} (из .env)`);
+            }
+        }
+    });
+}
 
 // Обработка ошибок
 bot.catch((err) => {
