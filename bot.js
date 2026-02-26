@@ -26,6 +26,13 @@ bot.use(async (ctx, next) => {
 // Сессия для хранения временных данных
 bot.use(session({ initial: () => ({}) }));
 
+// Явная инициализация бота
+bot.init().then(() => {
+    console.log('✅ Бот инициализирован, botInfo получен');
+}).catch(err => {
+    console.error('❌ Ошибка инициализации бота:', err);
+});
+
 // === РАБОТА С ДАННЫМИ ===
 const LOCAL_DATA_FILE = path.join(__dirname, 'data-backup.json');
 
@@ -385,7 +392,7 @@ if (WEBHOOK_URL) {
     const app = express();
     app.use(express.json());
     
-    // Главная страница для проверки Render (исправлено)
+    // Главная страница для проверки Render
     app.get('/', (req, res) => {
         res.status(200).send(`
             <html>
@@ -467,17 +474,43 @@ if (WEBHOOK_URL) {
         res.status(200).send('OK');
     });
     
-    // Webhook эндпоинт для Telegram
+    // Webhook эндпоинт для Telegram (ИСПРАВЛЕННАЯ ВЕРСИЯ)
     app.post('/webhook', (req, res) => {
-        bot.handleUpdate(req.body, res);
+        console.log('📨 Получен POST запрос на /webhook');
+        console.log('  Headers:', JSON.stringify(req.headers, null, 2));
+        console.log('  Body:', JSON.stringify(req.body, null, 2));
+
+        try {
+            // Важно: нужно отправить ответ, даже если бот упадет
+            bot.handleUpdate(req.body).then(() => {
+                console.log('✅ Бот успешно обработал обновление');
+                res.status(200).send('OK');
+            }).catch((err) => {
+                console.error('❌ Бот упал при обработке:', err);
+                res.status(200).send('OK'); // Все равно отвечаем OK, чтобы Telegram не слал повторно
+            });
+        } catch (error) {
+            console.error('❌ Критическая ошибка в обработчике вебхука:', error);
+            res.status(500).send('Internal Server Error');
+        }
     });
     
     // Устанавливаем webhook в Telegram
     (async () => {
         try {
             const webhookUrl = `${WEBHOOK_URL}/webhook`;
+            
+            // Сначала удалим старый вебхук, чтобы избежать конфликтов
+            await bot.api.deleteWebhook();
+            console.log('✅ Старый вебхук удален');
+            
+            // Устанавливаем новый
             await bot.api.setWebhook(webhookUrl);
             console.log(`✅ Webhook установлен на ${webhookUrl}`);
+            
+            // Проверяем статус
+            const webhookInfo = await bot.api.getWebhookInfo();
+            console.log('📊 Информация о вебхуке:', webhookInfo);
         } catch (error) {
             console.error('❌ Ошибка установки webhook:', error);
         }
