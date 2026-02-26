@@ -385,15 +385,78 @@ if (WEBHOOK_URL) {
     const app = express();
     app.use(express.json());
     
-    // Главная страница для проверки Render
+    // Главная страница для проверки Render (исправлено)
     app.get('/', (req, res) => {
         res.status(200).send(`
             <html>
-                <head><title>Stefan Budimir Bot</title></head>
+                <head>
+                    <title>Stefan Budimir Bot</title>
+                    <meta charset="utf-8">
+                    <style>
+                        body { 
+                            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; 
+                            text-align: center; 
+                            padding: 40px 20px; 
+                            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                            color: white;
+                            min-height: 100vh;
+                            margin: 0;
+                            display: flex;
+                            align-items: center;
+                            justify-content: center;
+                        }
+                        .container {
+                            max-width: 600px;
+                            background: rgba(255,255,255,0.1);
+                            backdrop-filter: blur(10px);
+                            padding: 40px;
+                            border-radius: 20px;
+                            box-shadow: 0 20px 40px rgba(0,0,0,0.2);
+                        }
+                        h1 { 
+                            font-size: 48px; 
+                            margin-bottom: 20px;
+                            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+                        }
+                        .success { 
+                            background: rgba(76, 175, 80, 0.3);
+                            padding: 15px;
+                            border-radius: 30px;
+                            margin: 20px 0;
+                            border: 2px solid #4CAF50;
+                        }
+                        a { 
+                            color: white; 
+                            text-decoration: none;
+                            background: rgba(255,255,255,0.2);
+                            padding: 12px 30px;
+                            border-radius: 30px;
+                            display: inline-block;
+                            margin-top: 20px;
+                            transition: all 0.3s;
+                        }
+                        a:hover {
+                            background: rgba(255,255,255,0.3);
+                            transform: scale(1.05);
+                        }
+                        code {
+                            background: rgba(0,0,0,0.3);
+                            padding: 4px 8px;
+                            border-radius: 8px;
+                        }
+                    </style>
+                </head>
                 <body>
-                    <h1>🤖 Bot is running!</h1>
-                    <p>Telegram bot @stefan_budimir_bot is active.</p>
-                    <p><a href="https://t.me/stefan_budimir_bot" target="_blank">Open in Telegram</a></p>
+                    <div class="container">
+                        <h1>🤖 Telegram Bot</h1>
+                        <div class="success">
+                            ✅ Bot is running and webhook is set!
+                        </div>
+                        <p style="font-size: 20px;">Bot: <b>@stefan_budimir_bot</b></p>
+                        <p>Webhook endpoint: <code>/webhook</code></p>
+                        <p>Status: <span style="color: #4CAF50;">● Online</span></p>
+                        <a href="https://t.me/stefan_budimir_bot" target="_blank">👉 Open in Telegram</a>
+                    </div>
                 </body>
             </html>
         `);
