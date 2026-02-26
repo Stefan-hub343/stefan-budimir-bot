@@ -206,7 +206,7 @@ bot.callbackQuery('portfolio', async (ctx) => {
         `📸 *Мои проекты и работы*\n\n` +
         `*Проект 1:* Support Bot\n` +
         `Телеграм-бот, с функцией крипто-переводов, на базе TON-Connect\n` +
-        `🔗 @baldezhniki_support_bot\n\n` +
+        `🔗 "@baldezhniki_support_bot"\n\n` +
         `*Проект 2:* [Название]\n` +
         `ожидайте.\n` +
         `🔗 [Ссылка]\n\n` +
