@@ -2,6 +2,7 @@ const { Bot, Keyboard, InlineKeyboard, session } = require('grammy');
 const fs = require('fs').promises;
 const path = require('path');
 const express = require('express');
+const fetch = require('node-fetch');
 require('dotenv').config();
 
 // Создаем экземпляр бота
@@ -10,9 +11,17 @@ const bot = new Bot(process.env.BOT_TOKEN);
 // ID администратора из переменных окружения
 const ADMIN_ID = parseInt(process.env.ADMIN_ID);
 
+// Конфигурация JSONBin
+const JSONBIN_ID = process.env.JSONBIN_ID;
+const JSONBIN_KEY = process.env.JSONBIN_KEY;
+
 // Проверка, что ID загрузился
 if (!ADMIN_ID) {
     console.warn('⚠️ ВНИМАНИЕ: ADMIN_ID не указан в .env! Админ-панель будет недоступна.');
+}
+
+if (!JSONBIN_ID || !JSONBIN_KEY) {
+    console.warn('⚠️ ВНИМАНИЕ: JSONBIN_ID или JSONBIN_KEY не указаны! Посты не будут сохраняться.');
 }
 
 // Middleware для логирования
@@ -33,10 +42,64 @@ bot.init().then(() => {
     console.error('❌ Ошибка инициализации бота:', err);
 });
 
-// === РАБОТА С ДАННЫМИ ===
+// === РАБОТА С JSONBIN ===
 const LOCAL_DATA_FILE = path.join(__dirname, 'data-backup.json');
 
-// Проверка на админа
+// Функция загрузки из JSONBin
+async function loadFromJSONBin() {
+    try {
+        const response = await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_ID}`, {
+            headers: { 'X-Access-Key': JSONBIN_KEY }
+        });
+        
+        if (!response.ok) {
+            throw new Error(`JSONBin error: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        return data.record;
+    } catch (error) {
+        console.error('❌ Ошибка загрузки из JSONBin:', error);
+        
+        // Пробуем загрузить из локального бэкапа
+        try {
+            const localData = await fs.readFile(LOCAL_DATA_FILE, 'utf8');
+            return JSON.parse(localData);
+        } catch (localError) {
+            console.log('📁 Локальный бэкап не найден, создаем новый');
+            return { posts: [], reviews: [] };
+        }
+    }
+}
+
+// Функция сохранения в JSONBin
+async function saveToJSONBin(data) {
+    try {
+        const response = await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_ID}`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Access-Key': JSONBIN_KEY
+            },
+            body: JSON.stringify(data)
+        });
+        
+        if (response.ok) {
+            // Сохраняем локальную копию
+            await fs.writeFile(LOCAL_DATA_FILE, JSON.stringify(data, null, 2));
+            console.log('✅ Данные сохранены в JSONBin и локально');
+            return true;
+        } else {
+            console.error('❌ JSONBin ошибка:', response.status);
+            return false;
+        }
+    } catch (error) {
+        console.error('❌ Ошибка сохранения в JSONBin:', error);
+        return false;
+    }
+}
+
+// === ПРОВЕРКА НА АДМИНА ===
 function isAdmin(ctx) {
     return ADMIN_ID && ctx.from?.id === ADMIN_ID;
 }
@@ -81,15 +144,14 @@ bot.callbackQuery(/admin_.+/, async (ctx) => {
     
     else if (action === 'admin_list_posts') {
         try {
-            const data = await fs.readFile(LOCAL_DATA_FILE, 'utf8').catch(() => '{"posts":[],"reviews":[]}');
-            const json = JSON.parse(data);
+            const data = await loadFromJSONBin();
             
-            if (json.posts.length === 0) {
+            if (!data.posts || data.posts.length === 0) {
                 await ctx.reply('📭 Нет сохраненных постов');
             } else {
                 let msg = '📋 *Твои посты:*\n\n';
-                json.posts.slice(0, 5).forEach((post, i) => {
-                    msg += `${i+1}. ID: \`${post.id}\`\n   ${post.text.substring(0, 50)}...\n\n`;
+                data.posts.slice(0, 5).forEach((post, i) => {
+                    msg += `${i+1}. ID: \`${post.id}\`\n   ${post.text.substring(0, 50)}...\n`;
                 });
                 await ctx.reply(msg, { parse_mode: 'Markdown' });
             }
@@ -100,14 +162,13 @@ bot.callbackQuery(/admin_.+/, async (ctx) => {
     
     else if (action === 'admin_reviews') {
         try {
-            const data = await fs.readFile(LOCAL_DATA_FILE, 'utf8').catch(() => '{"posts":[],"reviews":[]}');
-            const json = JSON.parse(data);
+            const data = await loadFromJSONBin();
             
-            if (json.reviews.length === 0) {
+            if (!data.reviews || data.reviews.length === 0) {
                 await ctx.reply('📭 Нет отзывов');
             } else {
                 let msg = '💬 *Последние отзывы:*\n\n';
-                json.reviews.slice(0, 5).forEach((review, i) => {
+                data.reviews.slice(0, 5).forEach((review, i) => {
                     msg += `${i+1}. *${review.author.name}*: ${review.text.substring(0, 100)}...\n`;
                 });
                 await ctx.reply(msg, { parse_mode: 'Markdown' });
@@ -123,7 +184,13 @@ bot.callbackQuery(/admin_.+/, async (ctx) => {
     }
     
     else if (action === 'admin_sync') {
-        await ctx.reply('🔄 Синхронизация с JSONBin... (функция в разработке)');
+        await ctx.reply('🔄 Синхронизация...');
+        try {
+            const data = await loadFromJSONBin();
+            await ctx.reply(`✅ Данные загружены: ${data.posts?.length || 0} постов, ${data.reviews?.length || 0} отзывов`);
+        } catch (e) {
+            await ctx.reply('❌ Ошибка синхронизации');
+        }
     }
 });
 
@@ -206,7 +273,7 @@ bot.callbackQuery('portfolio', async (ctx) => {
         `📸 *Мои проекты и работы*\n\n` +
         `*Проект 1:* Support Bot\n` +
         `Телеграм-бот, с функцией крипто-переводов, на базе TON-Connect\n` +
-        `🔗 "@baldezhniki_support_bot"\n\n` +
+        `🔗 @baldezhniki_support_bot\n\n` +
         `*Проект 2:* [Название]\n` +
         `ожидайте.\n` +
         `🔗 [Ссылка]\n\n` +
@@ -306,7 +373,7 @@ bot.on('message:text', async (ctx) => {
         if (ctx.session.awaitingPost) {
             ctx.session.awaitingPost = false;
             
-            const post = {
+            const newPost = {
                 id: Date.now(),
                 author: {
                     id: ADMIN_ID,
@@ -320,16 +387,18 @@ bot.on('message:text', async (ctx) => {
                 comments: []
             };
             
-            try {
-                const data = await fs.readFile(LOCAL_DATA_FILE, 'utf8').catch(() => '{"posts":[],"reviews":[]}');
-                const json = JSON.parse(data);
-                json.posts.unshift(post);
-                await fs.writeFile(LOCAL_DATA_FILE, JSON.stringify(json, null, 2));
-                await ctx.reply(`✅ Пост сохранен!\n\nID: \`${post.id}\``, { parse_mode: 'Markdown' });
-                console.log('💾 Пост сохранен локально');
-            } catch (e) {
-                await ctx.reply('❌ Ошибка сохранения');
-                console.error('Ошибка сохранения:', e);
+            // Загружаем текущие данные из JSONBin
+            const currentData = await loadFromJSONBin();
+            
+            // Добавляем новый пост
+            if (!currentData.posts) currentData.posts = [];
+            currentData.posts.unshift(newPost);
+            
+            // Сохраняем обратно в JSONBin
+            if (await saveToJSONBin(currentData)) {
+                await ctx.reply(`✅ Пост сохранен в JSONBin!\n\nID: \`${newPost.id}\``, { parse_mode: 'Markdown' });
+            } else {
+                await ctx.reply('❌ Ошибка сохранения в JSONBin');
             }
             return;
         }
@@ -338,21 +407,18 @@ bot.on('message:text', async (ctx) => {
             ctx.session.awaitingDeletePost = false;
             const postId = parseInt(ctx.message.text);
             
-            try {
-                const data = await fs.readFile(LOCAL_DATA_FILE, 'utf8');
-                const json = JSON.parse(data);
-                const initialLength = json.posts.length;
-                json.posts = json.posts.filter(p => p.id !== postId);
-                
-                if (json.posts.length < initialLength) {
-                    await fs.writeFile(LOCAL_DATA_FILE, JSON.stringify(json, null, 2));
+            const currentData = await loadFromJSONBin();
+            const initialLength = currentData.posts?.length || 0;
+            currentData.posts = (currentData.posts || []).filter(p => p.id !== postId);
+            
+            if (currentData.posts.length < initialLength) {
+                if (await saveToJSONBin(currentData)) {
                     await ctx.reply(`✅ Пост с ID ${postId} удален`);
                 } else {
-                    await ctx.reply(`❌ Пост с ID ${postId} не найден`);
+                    await ctx.reply('❌ Ошибка удаления');
                 }
-            } catch (e) {
-                await ctx.reply('❌ Ошибка удаления');
-                console.error('Ошибка удаления:', e);
+            } else {
+                await ctx.reply(`❌ Пост с ID ${postId} не найден`);
             }
             return;
         }
@@ -382,162 +448,53 @@ bot.on('message:contact', async (ctx) => {
 
 // === WEBHOOK НАСТРОЙКИ ДЛЯ RENDER ===
 const PORT = process.env.PORT || 3000;
-const WEBHOOK_URL = process.env.RENDER_EXTERNAL_URL; // Render сам подставит URL
+const WEBHOOK_URL = process.env.RENDER_EXTERNAL_URL;
 
 if (WEBHOOK_URL) {
-    // На Render - используем webhook
     console.log('🌐 Режим: Webhook на Render');
     
-    // Создаем Express приложение
     const app = express();
     app.use(express.json());
     
-    // Главная страница для проверки Render
     app.get('/', (req, res) => {
         res.status(200).send(`
             <html>
-                <head>
-                    <title>Stefan Budimir Bot</title>
-                    <meta charset="utf-8">
-                    <style>
-                        body { 
-                            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; 
-                            text-align: center; 
-                            padding: 40px 20px; 
-                            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                            color: white;
-                            min-height: 100vh;
-                            margin: 0;
-                            display: flex;
-                            align-items: center;
-                            justify-content: center;
-                        }
-                        .container {
-                            max-width: 600px;
-                            background: rgba(255,255,255,0.1);
-                            backdrop-filter: blur(10px);
-                            padding: 40px;
-                            border-radius: 20px;
-                            box-shadow: 0 20px 40px rgba(0,0,0,0.2);
-                        }
-                        h1 { 
-                            font-size: 48px; 
-                            margin-bottom: 20px;
-                            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
-                        }
-                        .success { 
-                            background: rgba(76, 175, 80, 0.3);
-                            padding: 15px;
-                            border-radius: 30px;
-                            margin: 20px 0;
-                            border: 2px solid #4CAF50;
-                        }
-                        a { 
-                            color: white; 
-                            text-decoration: none;
-                            background: rgba(255,255,255,0.2);
-                            padding: 12px 30px;
-                            border-radius: 30px;
-                            display: inline-block;
-                            margin-top: 20px;
-                            transition: all 0.3s;
-                        }
-                        a:hover {
-                            background: rgba(255,255,255,0.3);
-                            transform: scale(1.05);
-                        }
-                        code {
-                            background: rgba(0,0,0,0.3);
-                            padding: 4px 8px;
-                            border-radius: 8px;
-                        }
-                    </style>
-                </head>
-                <body>
-                    <div class="container">
-                        <h1>🤖 Telegram Bot</h1>
-                        <div class="success">
-                            ✅ Bot is running and webhook is set!
-                        </div>
-                        <p style="font-size: 20px;">Bot: <b>@stefan_budimir_bot</b></p>
-                        <p>Webhook endpoint: <code>/webhook</code></p>
-                        <p>Status: <span style="color: #4CAF50;">● Online</span></p>
-                        <a href="https://t.me/stefan_budimir_bot" target="_blank">👉 Open in Telegram</a>
-                    </div>
+                <head><title>Stefan Budimir Bot</title></head>
+                <body style="font-family:Arial; text-align:center; padding:50px;">
+                    <h1>🤖 Bot is running!</h1>
+                    <p>Telegram bot @stefan_budimir_bot is active.</p>
+                    <p><a href="https://t.me/stefan_budimir_bot" target="_blank">Open in Telegram</a></p>
                 </body>
             </html>
         `);
     });
     
-    // Health check для Render (обязательно!)
     app.get('/health', (req, res) => {
         res.status(200).send('OK');
     });
     
-    // Webhook эндпоинт для Telegram (ИСПРАВЛЕННАЯ ВЕРСИЯ)
     app.post('/webhook', (req, res) => {
-        console.log('📨 Получен POST запрос на /webhook');
-        console.log('  Headers:', JSON.stringify(req.headers, null, 2));
-        console.log('  Body:', JSON.stringify(req.body, null, 2));
-
-        try {
-            // Важно: нужно отправить ответ, даже если бот упадет
-            bot.handleUpdate(req.body).then(() => {
-                console.log('✅ Бот успешно обработал обновление');
-                res.status(200).send('OK');
-            }).catch((err) => {
-                console.error('❌ Бот упал при обработке:', err);
-                res.status(200).send('OK'); // Все равно отвечаем OK, чтобы Telegram не слал повторно
-            });
-        } catch (error) {
-            console.error('❌ Критическая ошибка в обработчике вебхука:', error);
-            res.status(500).send('Internal Server Error');
-        }
+        bot.handleUpdate(req.body).then(() => res.status(200).send('OK'));
     });
     
-    // Устанавливаем webhook в Telegram
     (async () => {
         try {
-            const webhookUrl = `${WEBHOOK_URL}/webhook`;
-            
-            // Сначала удалим старый вебхук, чтобы избежать конфликтов
             await bot.api.deleteWebhook();
-            console.log('✅ Старый вебхук удален');
-            
-            // Устанавливаем новый
-            await bot.api.setWebhook(webhookUrl);
-            console.log(`✅ Webhook установлен на ${webhookUrl}`);
-            
-            // Проверяем статус
-            const webhookInfo = await bot.api.getWebhookInfo();
-            console.log('📊 Информация о вебхуке:', webhookInfo);
+            await bot.api.setWebhook(`${WEBHOOK_URL}/webhook`);
+            console.log(`✅ Webhook установлен на ${WEBHOOK_URL}/webhook`);
         } catch (error) {
             console.error('❌ Ошибка установки webhook:', error);
         }
     })();
     
-    // Запускаем сервер
     app.listen(PORT, '0.0.0.0', () => {
         console.log(`🚀 Сервер webhook запущен на порту ${PORT}`);
-        console.log(`📅 Время запуска: ${new Date().toLocaleString()}`);
         console.log(`👑 Админ ID: ${ADMIN_ID}`);
-        console.log(`🌐 URL сервера: ${WEBHOOK_URL}`);
-        console.log(`🔗 Webhook URL: ${WEBHOOK_URL}/webhook`);
     });
     
 } else {
-    // Локально - используем polling
     console.log('🔄 Режим: Polling (локально)');
-    
-    bot.start({
-        onStart: (botInfo) => {
-            console.log(`✅ Бот @${botInfo.username} запущен в режиме polling!`);
-            console.log(`📅 Время запуска: ${new Date().toLocaleString()}`);
-            if (ADMIN_ID) {
-                console.log(`👑 Админ ID: ${ADMIN_ID} (из .env)`);
-            }
-        }
-    });
+    bot.start();
 }
 
 // Обработка ошибок
@@ -545,18 +502,9 @@ bot.catch((err) => {
     console.error('❌ Ошибка бота:', err);
 });
 
-// Корректное завершение
-async function shutdown(signal) {
-    console.log(`\n👋 Получен сигнал ${signal}. Останавливаем бота...`);
-    try {
-        await bot.stop();
-        console.log('✅ Бот успешно остановлен');
-        process.exit(0);
-    } catch (err) {
-        console.error('❌ Ошибка при остановке:', err);
-        process.exit(1);
-    }
-}
-
-process.once('SIGINT', () => shutdown('SIGINT'));
-process.once('SIGTERM', () => shutdown('SIGTERM'));
+// Синхронизация при запуске
+(async () => {
+    console.log('🔄 Синхронизация с JSONBin...');
+    const data = await loadFromJSONBin();
+    console.log(`✅ Загружено: ${data.posts?.length || 0} постов, ${data.reviews?.length || 0} отзывов`);
+})();
