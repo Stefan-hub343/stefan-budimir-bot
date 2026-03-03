@@ -3,6 +3,7 @@ const fs = require('fs').promises;
 const path = require('path');
 const express = require('express');
 const fetch = require('node-fetch');
+const FormData = require('form-data');
 require('dotenv').config();
 
 // Создаем экземпляр бота
@@ -15,6 +16,9 @@ const ADMIN_ID = parseInt(process.env.ADMIN_ID);
 const JSONBIN_ID = process.env.JSONBIN_ID;
 const JSONBIN_KEY = process.env.JSONBIN_KEY;
 
+// API ключ для ImgBB (получить на https://api.imgbb.com)
+const IMGBB_API_KEY = process.env.IMGBB_API_KEY;
+
 // Проверка, что ID загрузился
 if (!ADMIN_ID) {
     console.warn('⚠️ ВНИМАНИЕ: ADMIN_ID не указан в .env! Админ-панель будет недоступна.');
@@ -22,6 +26,10 @@ if (!ADMIN_ID) {
 
 if (!JSONBIN_ID || !JSONBIN_KEY) {
     console.warn('⚠️ ВНИМАНИЕ: JSONBIN_ID или JSONBIN_KEY не указаны! Посты не будут сохраняться.');
+}
+
+if (!IMGBB_API_KEY) {
+    console.warn('⚠️ ВНИМАНИЕ: IMGBB_API_KEY не указан! Фото не будут загружаться.');
 }
 
 // Middleware для логирования
@@ -99,6 +107,67 @@ async function saveToJSONBin(data) {
     }
 }
 
+// === ФУНКЦИИ ДЛЯ РАБОТЫ С ФОТО ===
+
+// Функция для скачивания фото из Telegram
+async function downloadPhoto(fileId) {
+    try {
+        console.log('📥 Скачиваем фото:', fileId);
+        
+        // Получаем информацию о файле
+        const file = await bot.api.getFile(fileId);
+        const fileUrl = `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${file.file_path}`;
+        
+        console.log('📎 URL фото:', fileUrl);
+        
+        // Скачиваем файл
+        const response = await fetch(fileUrl);
+        const buffer = await response.buffer();
+        
+        console.log('✅ Фото скачано, размер:', buffer.length, 'байт');
+        return buffer;
+    } catch (error) {
+        console.error('❌ Ошибка скачивания фото:', error);
+        return null;
+    }
+}
+
+// Функция для загрузки фото в ImgBB
+async function uploadToImgBB(imageBuffer) {
+    try {
+        console.log('📤 Загружаем фото в ImgBB...');
+        
+        if (!IMGBB_API_KEY) {
+            throw new Error('IMG BB API ключ не указан');
+        }
+        
+        // Конвертируем буфер в base64
+        const base64Image = imageBuffer.toString('base64');
+        
+        // Создаем FormData
+        const formData = new FormData();
+        formData.append('image', base64Image);
+        
+        // Отправляем запрос к ImgBB API
+        const response = await fetch(`https://api.imgbb.com/1/upload?key=${IMGBB_API_KEY}`, {
+            method: 'POST',
+            body: formData
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            console.log('✅ Фото загружено в ImgBB:', data.data.url);
+            return data.data.url;
+        } else {
+            throw new Error(data.error?.message || 'Ошибка загрузки в ImgBB');
+        }
+    } catch (error) {
+        console.error('❌ Ошибка загрузки в ImgBB:', error);
+        return null;
+    }
+}
+
 // === ПРОВЕРКА НА АДМИНА ===
 function isAdmin(ctx) {
     return ADMIN_ID && ctx.from?.id === ADMIN_ID;
@@ -138,8 +207,10 @@ bot.callbackQuery(/admin_.+/, async (ctx) => {
     await ctx.answerCallbackQuery();
     
     if (action === 'admin_new_post') {
-        await ctx.reply('📝 Отправь мне текст нового поста:');
+        await ctx.reply('📝 Отправь мне текст нового поста. Если хочешь добавить фото, отправь его вместе с текстом или отдельно:');
         ctx.session.awaitingPost = true;
+        ctx.session.awaitingPostPhoto = null;
+        return;
     }
     
     else if (action === 'admin_list_posts') {
@@ -151,7 +222,9 @@ bot.callbackQuery(/admin_.+/, async (ctx) => {
             } else {
                 let msg = '📋 *Твои посты:*\n\n';
                 data.posts.slice(0, 5).forEach((post, i) => {
-                    msg += `${i+1}. ID: \`${post.id}\`\n   ${post.text.substring(0, 50)}...\n`;
+                    msg += `${i+1}. ID: \`${post.id}\`\n`;
+                    if (post.image) msg += `   📸 Есть фото\n`;
+                    msg += `   ${post.text?.substring(0, 50) || 'Без текста'}...\n\n`;
                 });
                 await ctx.reply(msg, { parse_mode: 'Markdown' });
             }
@@ -366,12 +439,62 @@ bot.callbackQuery('back_to_main', async (ctx) => {
     );
 });
 
+// Обработчик для фото
+bot.on('message:photo', async (ctx) => {
+    if (!isAdmin(ctx)) return;
+    
+    if (ctx.session.awaitingPost) {
+        // Получаем фото максимального размера
+        const photo = ctx.message.photo.pop();
+        const fileId = photo.file_id;
+        
+        // Сохраняем file_id в сессии
+        ctx.session.awaitingPostPhoto = fileId;
+        
+        await ctx.reply('✅ Фото получено! Теперь отправь текст поста (или отправь /skip если хочешь опубликовать только фото)');
+    }
+});
+
+// Обработчик для команды /skip (пропустить текст)
+bot.command('skip', async (ctx) => {
+    if (!isAdmin(ctx) || !ctx.session.awaitingPost) return;
+    
+    // Имитируем отправку пустого текста
+    ctx.message.text = '';
+    await bot.handleUpdate({
+        ...ctx.update,
+        message: {
+            ...ctx.message,
+            text: ''
+        }
+    });
+});
+
 // Обработка текстовых сообщений
 bot.on('message:text', async (ctx) => {
     // Сначала проверяем админские сессии
     if (isAdmin(ctx)) {
         if (ctx.session.awaitingPost) {
             ctx.session.awaitingPost = false;
+            
+            const postText = ctx.message.text || '';
+            const photoFileId = ctx.session.awaitingPostPhoto;
+            
+            let imageUrl = null;
+            
+            // Если есть фото, загружаем его в ImgBB
+            if (photoFileId) {
+                await ctx.reply('⏳ Загружаю фото...');
+                const imageBuffer = await downloadPhoto(photoFileId);
+                if (imageBuffer) {
+                    imageUrl = await uploadToImgBB(imageBuffer);
+                    if (imageUrl) {
+                        await ctx.reply('✅ Фото успешно загружено!');
+                    } else {
+                        await ctx.reply('⚠️ Не удалось загрузить фото, пост будет без изображения');
+                    }
+                }
+            }
             
             const newPost = {
                 id: Date.now(),
@@ -381,7 +504,8 @@ bot.on('message:text', async (ctx) => {
                     username: 'stefan_budimir'
                 },
                 date: new Date().toISOString(),
-                text: ctx.message.text,
+                text: postText,
+                image: imageUrl, // Ссылка на фото
                 likes: 0,
                 likedBy: [],
                 comments: []
@@ -396,10 +520,16 @@ bot.on('message:text', async (ctx) => {
             
             // Сохраняем обратно в JSONBin
             if (await saveToJSONBin(currentData)) {
-                await ctx.reply(`✅ Пост сохранен в JSONBin!\n\nID: \`${newPost.id}\``, { parse_mode: 'Markdown' });
+                let successMsg = `✅ Пост успешно создан!\n\nID: \`${newPost.id}\``;
+                if (imageUrl) successMsg += '\n📸 С фото';
+                if (!postText) successMsg += '\n📝 Без текста';
+                
+                await ctx.reply(successMsg, { parse_mode: 'Markdown' });
             } else {
                 await ctx.reply('❌ Ошибка сохранения в JSONBin');
             }
+            
+            ctx.session.awaitingPostPhoto = null;
             return;
         }
         
@@ -490,6 +620,7 @@ if (WEBHOOK_URL) {
     app.listen(PORT, '0.0.0.0', () => {
         console.log(`🚀 Сервер webhook запущен на порту ${PORT}`);
         console.log(`👑 Админ ID: ${ADMIN_ID}`);
+        console.log(`📸 Загрузка фото: ${IMGBB_API_KEY ? '✅' : '❌'}`);
     });
     
 } else {
