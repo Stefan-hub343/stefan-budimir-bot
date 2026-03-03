@@ -110,21 +110,29 @@ async function saveToJSONBin(data) {
 // === ФУНКЦИИ ДЛЯ РАБОТЫ С ФОТО ===
 
 // Функция для скачивания фото из Telegram
+// Функция для скачивания фото из Telegram
 async function downloadPhoto(fileId) {
     try {
-        console.log('📥 Скачиваем фото:', fileId);
+        console.log('📥 Скачиваем фото, fileId:', fileId);
         
         // Получаем информацию о файле
         const file = await bot.api.getFile(fileId);
-        const fileUrl = `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${file.file_path}`;
+        console.log('📎 Информация о файле:', file);
         
+        const fileUrl = `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${file.file_path}`;
         console.log('📎 URL фото:', fileUrl);
         
         // Скачиваем файл
         const response = await fetch(fileUrl);
-        const buffer = await response.buffer();
+        console.log('📥 Статус скачивания:', response.status);
         
+        if (!response.ok) {
+            throw new Error(`Ошибка скачивания: ${response.status}`);
+        }
+        
+        const buffer = await response.buffer();
         console.log('✅ Фото скачано, размер:', buffer.length, 'байт');
+        
         return buffer;
     } catch (error) {
         console.error('❌ Ошибка скачивания фото:', error);
@@ -133,33 +141,45 @@ async function downloadPhoto(fileId) {
 }
 
 // Функция для загрузки фото в ImgBB
+// Функция для загрузки фото в ImgBB
 async function uploadToImgBB(imageBuffer) {
     try {
-        console.log('📤 Загружаем фото в ImgBB...');
+        console.log('📤 Начинаем загрузку в ImgBB...');
         
         if (!IMGBB_API_KEY) {
+            console.error('❌ IMGBB_API_KEY не указан!');
             throw new Error('IMG BB API ключ не указан');
         }
         
+        console.log('🔑 API ключ есть, длина:', IMGBB_API_KEY.length);
+        
         // Конвертируем буфер в base64
         const base64Image = imageBuffer.toString('base64');
+        console.log('📦 Base64 размер:', base64Image.length);
         
         // Создаем FormData
         const formData = new FormData();
         formData.append('image', base64Image);
         
         // Отправляем запрос к ImgBB API
-        const response = await fetch(`https://api.imgbb.com/1/upload?key=${IMGBB_API_KEY}`, {
+        const url = `https://api.imgbb.com/1/upload?key=${IMGBB_API_KEY}`;
+        console.log('📤 Отправляем запрос к ImgBB...');
+        
+        const response = await fetch(url, {
             method: 'POST',
             body: formData
         });
         
+        console.log('📥 Статус ответа ImgBB:', response.status);
+        
         const data = await response.json();
+        console.log('📦 Ответ ImgBB:', JSON.stringify(data, null, 2));
         
         if (data.success) {
             console.log('✅ Фото загружено в ImgBB:', data.data.url);
             return data.data.url;
         } else {
+            console.error('❌ Ошибка ImgBB:', data.error);
             throw new Error(data.error?.message || 'Ошибка загрузки в ImgBB');
         }
     } catch (error) {
