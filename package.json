@@ -21,6 +21,7 @@
     "cors": "^2.8.6",
     "dotenv": "^16.3.1",
     "express": "^4.22.1",
+    "form-data": "^4.0.5",
     "fs": "^0.0.1-security",
     "grammy": "^1.19.2"
   },
